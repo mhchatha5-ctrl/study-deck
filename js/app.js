@@ -154,7 +154,7 @@ export function banners() {
   const age = last ? daysBetween(last, today()) : first ? daysBetween(first, today()) : 0;
   if (hasData && age >= 7) {
     out.push(h('div', { class: 'banner' }, h('span', null, last ? `Last backup ${age} days ago.` : 'You have not made a backup yet.'),
-      h('button', { class: 'btn', onclick: () => screens.settings.exportBackup() }, 'Back up')));
+      h('button', { class: 'btn', onclick: () => screens.settings.exportBackup().then(() => route()) }, 'Back up')));
   }
   return out;
 }

@@ -429,6 +429,162 @@ if (run(1)) {
 }
 
 // =====================================================================
+async function seedLibrary(page, t) {
+  await t.importPdfs(['Sample Question Book.pdf', 'Sample Answers.pdf', 'Sample Paper.pdf', 'Sample Reading.pdf']);
+  await t.kind('Sample Question Book', 'Question book');
+  await t.kind('Sample Answers', 'Question book');
+  await t.kind('Sample Paper', 'Past paper');
+  await t.kind('Sample Reading', 'Reading');
+  // Sections set up directly (the tapping itself is covered in stage 1).
+  await page.evaluate(async () => {
+    const { S, createSection, putSection } = await import('./js/store.js');
+    const id = (n) => [...S.pdfs.values()].find((p) => p.name === n).id;
+    const qb = id('Sample Question Book'), rd = id('Sample Reading'), pp = id('Sample Paper');
+    const a = createSection(qb, 1, { title: 'Ch 1' }); a.aPdf = qb; a.aPage = 10; putSection(a);
+    const b = createSection(qb, 4, { title: 'Ch 2' }); b.aPdf = qb; b.aPage = 12; putSection(b);
+    createSection(rd, 1, { title: 'Part 1' });
+    createSection(rd, 4, { title: 'Part 2' });
+    const c = createSection(pp, 1, { title: 'Paper' }); c.same = true; putSection(c);
+  });
+}
+
+if (run(2)) {
+  console.log('Stage 2: Today and Quick 5');
+  const { ctx, page } = await newPhone({ time: new Date('2026-10-04T09:00:00') });
+  const t = H(page);
+  await page.goto(BASE);
+  await seedLibrary(page, t);
+
+  await check('without setup, Today resumes where you stopped', async () => {
+    await t.open('Sample Question Book');
+    await t.scrollTo(5, 0.2);
+    await t.back();
+    await page.click('#tabs button[data-tab=today]');
+    assert.match(await page.locator('.task p').innerText(), /Sample Question Book · Ch 2 · p\.5/);
+    await page.click('.task .btn');
+    await page.waitForSelector('.pv-canvas');
+    assert.equal(await t.page(), 5);
+    await t.back();
+  });
+
+  await check('exam date proposes plan phase dates, which can be adjusted', async () => {
+    await page.click('#tabs button[data-tab=settings]');
+    await page.locator('.card', { hasText: 'Exam and plan' }).locator('input[type=date]').first().fill('2026-12-31');
+    await page.waitForTimeout(200);
+    let s = (await t.state()).kv.settings;
+    assert.deepEqual([s.examDate, s.readEnd, s.qEnd], ['2026-12-31', '2026-10-30', '2026-12-09']);
+    await page.locator('.field', { hasText: 'Reading until' }).locator('input').fill('2026-10-20');
+    await page.waitForTimeout(200);
+    s = (await t.state()).kv.settings;
+    assert.equal(s.readEnd, '2026-10-20');
+  });
+
+  await check('topics are pasted once, one per line', async () => {
+    await page.locator('.card', { hasText: 'Topics' }).locator('textarea').fill('Topic A\nTopic B\n\nTopic C\nTopic A');
+    await page.click('text=Save topics');
+    assert.deepEqual((await t.state()).kv.settings.topics, ['Topic A', 'Topic B', 'Topic C']);
+  });
+
+  await check('reading phase: Today offers the next reading section; days left shown', async () => {
+    await page.click('#tabs button[data-tab=today]');
+    assert.equal(await page.locator('.daysleft b').innerText(), '88');
+    assert.match(await page.locator('.chips').innerText(), /Reading phase/);
+    assert.match(await page.locator('.task p').innerText(), /Sample Reading · Part 1/);
+  });
+
+  await check('Section done means Start moves on to the next section', async () => {
+    await page.click('.task .btn');
+    await page.waitForSelector('.pv-canvas');
+    await t.tool('Done');
+    await page.waitForTimeout(200);
+    await t.back();
+    await page.goto(BASE + '#/today');
+    assert.match(await page.locator('.task p').innerText(), /Part 2 · p\.4/);
+  });
+
+  await check('due redo items always come first', async () => {
+    await page.evaluate(async () => {
+      const { S, markQuestion } = await import('./js/store.js');
+      const sec = [...S.sections.values()].find((s) => s.title === 'Ch 1');
+      markQuestion(sec, 1, 'wrong', { qPage: 1, aPdf: sec.aPdf, aPage: 10 });
+      markQuestion(sec, 2, 'unsure', { qPage: 1, aPdf: sec.aPdf, aPage: 10 });
+    });
+    await page.clock.setSystemTime(new Date('2026-10-07T09:00:00'));
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.match(await page.locator('.task h2').innerText(), /Redo 2 questions/);
+  });
+
+  await check('Not today moves the task (and due redo) to tomorrow; no self-rating', async () => {
+    await page.click('text=Not today');
+    assert.match(await page.locator('.task h2').innerText(), /Not today/);
+    assert.deepEqual((await t.state()).redo.map((r) => r.due), ['2026-10-08', '2026-10-08']);
+    await page.clock.setSystemTime(new Date('2026-10-08T09:00:00'));
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.match(await page.locator('.task h2').innerText(), /Redo 2 questions/);
+  });
+
+  await check('Quick 5 serves due redo items, then cards, with a 5-minute countdown', async () => {
+    await page.evaluate(async () => {
+      const { addCard } = await import('./js/store.js');
+      addCard({ trigger: 'Card one', target: 'Answer one' });
+      addCard({ trigger: 'Card two', target: 'Answer two' });
+    });
+    await page.click('text=Quick 5');
+    await page.waitForFunction(() => /Redo/.test(document.querySelector('.st-title')?.textContent));
+    assert.match(await page.locator('.st-title').innerText(), /Redo 1 of 2 · Quick 5/);
+    assert.match(await page.locator('.st-head span.chip.timer').innerText(), /^[45]:\d\d$/);
+    await page.click('.mark.right');
+    await page.waitForTimeout(300);
+    await page.click('.mark.right');
+    await page.waitForSelector('.rv-card');
+    assert.match(await page.locator('.st-title').innerText(), /Quick 5 · Cards/);
+    await page.click('.rv-card');
+    await page.click('text=Knew it');
+    await page.click('.rv-card');
+    await page.click('text=Missed it');
+    assert.match(await page.locator('.rv-done').innerText(), /1 \/ 2/);
+    await page.click('.rv-bar .btn');
+    assert.match(page.url(), /#\/today/);
+  });
+
+  await check('questions phase: Today offers the next question-book section', async () => {
+    assert.deepEqual((await t.state()).redo.map((r) => [r.stage, r.due]), [[10, '2026-10-18'], [10, '2026-10-18']]);
+    await page.evaluate(async () => { const { S, removeRedo } = await import('./js/store.js'); [...S.redo.keys()].forEach(removeRedo); });
+    await page.clock.setSystemTime(new Date('2026-10-25T09:00:00'));
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.match(await page.locator('.chips').innerText(), /Question books phase/);
+    assert.match(await page.locator('.task p').innerText(), /Question book: Sample Question Book · Ch 2/);
+  });
+
+  await check('past papers phase: Today offers a timed paper; Start asks for the time limit', async () => {
+    await page.clock.setSystemTime(new Date('2026-12-15T09:00:00'));
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.match(await page.locator('.task h2').innerText(), /Timed past paper/);
+    await page.click('.task .btn');
+    await page.waitForSelector('.sheet');
+    assert.match(await page.locator('.sheet').innerText(), /1 hour[\s\S]*2 hours[\s\S]*3 hours/);
+    await page.goBack();
+    await t.back();
+  });
+
+  await check('Quick 5 with nothing due says so plainly', async () => {
+    await page.evaluate(async () => {
+      const { S, deleteCard, removeRedo } = await import('./js/store.js');
+      [...S.cards.keys()].forEach(deleteCard);
+      [...S.redo.keys()].forEach(removeRedo);
+    });
+    await page.goto(BASE + '#/today');
+    await page.click('text=Quick 5');
+    assert.match(await page.locator('#toast').innerText(), /Nothing for Quick 5/);
+  });
+  await ctx.close();
+}
+
+// =====================================================================
 console.log(errors.length ? `Page errors:\n  ${[...new Set(errors)].join('\n  ')}` : 'No page errors.');
 console.log(`${passed} passed, ${failed} failed`);
 await browser.close();

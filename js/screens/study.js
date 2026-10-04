@@ -7,7 +7,7 @@ import {
   createSection, putSection, deleteSection, qEnd, aEnd, markQuestion, reviewRedo, savePos, flushPos, activePaper,
   startPaper, stopPaperClock, finishPaper, cancelPaper, paperElapsed, paperCounts, KIND_LABEL, dueRedo,
 } from '../store.js';
-import { cardForm } from './cards.js';
+import { cardForm, quick5Chip } from './cards.js';
 import { nav, goBack } from '../app.js';
 
 let current = null; // active study controller
@@ -47,6 +47,7 @@ class Study {
   }
 
   destroy() {
+    this.dead = true;
     this.persist();
     clearInterval(this.timerInt);
     document.removeEventListener('visibilitychange', this.onVis);
@@ -66,6 +67,7 @@ class Study {
     this.head = h('header', { class: 'st-head' },
       h('button', { class: 'iconbtn', 'aria-label': 'Back', onclick: () => this.close() }, icon('back')),
       h('div', { class: 'st-titles' }, this.title, this.sub),
+      this.opts.quick5 ? quick5Chip() : null,
       this.timerChip, this.pageChip);
 
     this.view = h('div', { class: 'st-view' + (st.invert ? ' invert' : '') });
@@ -170,6 +172,7 @@ class Study {
 
   // ---------- rendering of bars ----------
   refresh() {
+    if (this.dead) return;
     this.updateChips();
     this.renderStrip();
     this.renderMarks();
@@ -524,7 +527,13 @@ class Study {
     const item = this.item;
     const res = reviewRedo(item, m);
     const msg = res.cleared ? `Q${item.qNum} cleared from redo` : `Q${item.qNum}: back in ${res.stage} days`;
-    toast(msg, { label: 'Undo', fn: () => { res.undo(); this.qi--; this.queue.splice(this.qi + 1, 0, item.id); this.nextRedo(false); } }, 2500);
+    toast(msg, { label: 'Undo', fn: () => {
+      res.undo();
+      if (this.dead) { toast(`Q${item.qNum} restored to the redo list`); return; }
+      this.qi--;
+      this.queue.splice(this.qi + 1, 0, item.id);
+      this.nextRedo(false);
+    } }, 2500);
     this.nextRedo(false);
   }
 

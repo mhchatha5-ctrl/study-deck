@@ -72,10 +72,10 @@ export function renderReview(root, { quick5 } = {}) {
     body.replaceChildren(h('div', { class: 'rv-card', onclick: () => { if (!shown) { shown = true; draw(); } } },
       h('div', { class: 'rv-trig' }, c.trigger),
       shown ? h('div', { class: 'rv-targ' }, c.target) : h('div', { class: 'rv-hint' }, 'Tap to reveal')));
-    bar.replaceChildren(shown
+    bar.replaceChildren(...(shown
       ? [h('button', { class: 'btn big bad', onclick: () => { reviewCard(c, false); missed++; i++; shown = false; draw(); } }, icon('cross'), 'Missed it'),
         h('button', { class: 'btn big good', onclick: () => { reviewCard(c, true); knew++; i++; shown = false; draw(); } }, icon('tick'), 'Knew it')]
-      : [h('button', { class: 'btn big primary wide', onclick: () => { shown = true; draw(); } }, 'Reveal')]);
+      : [h('button', { class: 'btn big primary wide', onclick: () => { shown = true; draw(); } }, 'Reveal')]));
   };
   root.replaceChildren(h('div', { class: 'review' },
     h('header', { class: 'st-head' },
