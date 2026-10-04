@@ -1,0 +1,16 @@
+{
+  "name": "study-deck",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Private, offline study app for PDFs. Static files only; no build step.",
+  "type": "module",
+  "scripts": {
+    "serve": "node test/server.mjs",
+    "precache": "node tools/precache.mjs",
+    "samples": "node tools/make-samples.mjs",
+    "test": "node tools/make-samples.mjs && node test/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}
