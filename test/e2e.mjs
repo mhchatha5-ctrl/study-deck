@@ -585,6 +585,109 @@ if (run(2)) {
 }
 
 // =====================================================================
+if (run(3)) {
+  console.log('Stage 3: cards and audio');
+  const { ctx, page } = await newPhone();
+  // Stand-in phone voice and wake lock, so speech can be checked headless.
+  await ctx.addInitScript(() => {
+    window.__spoken = [];
+    window.__wake = 0;
+    const fake = {
+      speak(u) { window.__spoken.push({ text: u.text, at: performance.now() }); setTimeout(() => u.onend && u.onend(), 40); },
+      cancel() {}, getVoices: () => [], speaking: false, paused: false,
+    };
+    Object.defineProperty(window, 'speechSynthesis', { value: fake, configurable: true });
+    Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => {
+      window.__wake++;
+      const l = new EventTarget();
+      l.release = async () => { window.__wake--; l.dispatchEvent(new Event('release')); };
+      return l;
+    } } });
+  });
+  const t = H(page);
+  await page.goto(BASE + '#/cards');
+  await page.waitForSelector('header h1');
+
+  await check('write Trigger → Target cards in seconds', async () => {
+    for (const [a, b] of [['Alpha trigger', 'Alpha target'], ['Beta trigger', 'Beta target'], ['Gamma trigger', 'Gamma target']]) {
+      await page.click('.pad .btn:has-text("New card")');
+      await page.waitForSelector('.sheet-back.show textarea');
+      await page.fill('.sheet textarea >> nth=0', a);
+      await page.fill('.sheet textarea >> nth=1', b);
+      await page.click('.sheet >> text=Save card');
+      await page.waitForTimeout(250);
+    }
+    assert.equal((await t.state()).cards.length, 3);
+    await page.goto(BASE + '#/today');
+    await page.goto(BASE + '#/cards');
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('.cardrow').count(), 3);
+  });
+
+  await check('edit and delete a card', async () => {
+    await page.click('.cardrow:has-text("Gamma")');
+    await page.fill('.sheet textarea >> nth=1', 'Gamma target edited');
+    await page.click('.sheet >> text=Save card');
+    await page.waitForTimeout(250);
+    assert.ok((await t.state()).cards.some((c) => c.target === 'Gamma target edited'));
+    await page.click('.cardrow:has-text("Gamma")');
+    await page.click('.sheet >> text=Delete card');
+    await page.click('.sheet .btn.danger');
+    await page.waitForTimeout(300);
+    assert.equal((await t.state()).cards.length, 2);
+  });
+
+  await check('tap to reveal, then Knew it / Missed it', async () => {
+    await page.click('.pad .btn:has-text("Review")');
+    await page.waitForSelector('.rv-card');
+    assert.equal(await page.locator('.rv-targ').count(), 0);
+    await page.click('.rv-card');
+    assert.equal(await page.locator('.rv-targ').innerText(), 'Alpha target');
+    await page.click('text=Knew it');
+    await page.click('.rv-bar >> text=Reveal');
+    assert.equal(await page.locator('.rv-targ').innerText(), 'Beta target');
+    await page.click('text=Missed it');
+    assert.match(await page.locator('.rv-done').innerText(), /1 \/ 2/);
+    await page.click('.rv-bar .btn');
+  });
+
+  await check('missed cards come first next time', async () => {
+    await page.click('.pad .btn:has-text("Review")');
+    await page.waitForSelector('.rv-card');
+    assert.equal(await page.locator('.rv-trig').innerText(), 'Beta trigger');
+    await page.click('.st-head .iconbtn');
+  });
+
+  await check('audio mode reads cards aloud, pausing before each Target, screen kept awake', async () => {
+    await page.click('.pad .btn:has-text("Audio")');
+    await page.waitForSelector('.audio');
+    for (let k = 0; k < 2; k++) await page.click('[aria-label="Shorter pause"]');  // 3s → 1s
+    await page.click('.rv-bar >> text=Play');
+    await page.waitForFunction(() => window.__spoken.length >= 4, null, { timeout: 15000 });
+    const spoken = await page.evaluate(() => window.__spoken);
+    assert.deepEqual(spoken.slice(0, 4).map((x) => x.text), ['Beta trigger', 'Beta target', 'Alpha trigger', 'Alpha target']);
+    const gap = spoken[1].at - spoken[0].at;
+    assert.ok(gap >= 1000 && gap < 2500, 'pause before target was ' + Math.round(gap) + 'ms');
+    await page.waitForSelector('text=All cards read.', { timeout: 10000 });
+    assert.equal(await page.evaluate(() => window.__wake), 0, 'released when the round ends');
+  });
+
+  await check('audio pause holds the screen awake only while playing', async () => {
+    await page.click('.rv-bar >> text=Play');
+    await page.waitForTimeout(200);
+    assert.equal(await page.evaluate(() => window.__wake), 1);
+    await page.click('.rv-bar >> text=Pause');
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => window.__wake), 0);
+    const n = await page.evaluate(() => window.__spoken.length);
+    await page.waitForTimeout(1500);
+    assert.equal(await page.evaluate(() => window.__spoken.length), n, 'nothing spoken while paused');
+    await page.click('.st-head .iconbtn');
+  });
+  await ctx.close();
+}
+
+// =====================================================================
 console.log(errors.length ? `Page errors:\n  ${[...new Set(errors)].join('\n  ')}` : 'No page errors.');
 console.log(`${passed} passed, ${failed} failed`);
 await browser.close();

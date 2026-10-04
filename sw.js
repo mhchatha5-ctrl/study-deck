@@ -1,6 +1,6 @@
 // Offline support. Caches the app's own files only. It never touches your
 // data or PDFs (those live in IndexedDB) and never handles other websites.
-const VERSION = '9c728432ab91';
+const VERSION = 'b9f468277f2e';
 const APP_CACHE = 'sd-app-' + VERSION;
 const RUNTIME = 'sd-runtime';
 // PRECACHE-START

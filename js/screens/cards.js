@@ -21,6 +21,10 @@ export function cardForm(card, link) {
     h('div', { class: 'arrow' }, '↓'),
     h('label', { class: 'lbl' }, 'Target'), targ,
     h('button', { class: 'btn big primary', onclick: save }, 'Save card'),
+    card && card.pdfId && S.pdfs.has(card.pdfId) ? h('button', { class: 'btn big', onclick: () => {
+      close();
+      import('../app.js').then(({ openRead }) => openRead(card.pdfId, { page: card.page }));
+    } }, 'Open its question') : null,
     card ? h('button', { class: 'btn big ghost danger-text', onclick: async () => {
       close();
       if (await confirmSheet('Delete this card?', card.trigger, 'Delete', true)) { deleteCard(card.id); toast('Card deleted'); nav(location.hash, true); }
@@ -112,7 +116,7 @@ export function quick5Chip() {
 export function renderAudio(root) {
   const queue = cardQueue();
   const synth = window.speechSynthesis;
-  let i = 0, playing = false, timer = null, phase = 'idle';
+  let i = 0, playing = false, timer = null, run = 0;
   const st = settings();
   let rate = st.rate, pause = st.pause;
   const trigEl = h('div', { class: 'rv-trig' });
@@ -124,7 +128,14 @@ export function renderAudio(root) {
 
   const showSettings = () => {
     rateVal.textContent = `Speed ${rate.toFixed(1)}×`;
-    pauseVal.textContent = `Pause ${pause}s`;
+    pauseVal.textContent = `Pause ${pause}s before target`;
+  };
+  const showButton = () => playBtn.replaceChildren(icon(playing ? 'pause' : 'start'), playing ? 'Pause' : (i ? 'Resume' : 'Play'));
+  const showCard = (reveal) => {
+    const c = queue[i];
+    count.textContent = queue.length ? `${Math.min(i + 1, queue.length)} / ${queue.length}` : '';
+    trigEl.textContent = c ? c.trigger : 'No cards yet.';
+    targEl.textContent = c && reveal ? c.target : '';
   };
 
   const say = (text) => new Promise((resolve) => {
@@ -136,58 +147,60 @@ export function renderAudio(root) {
     u.onend = fin;
     u.onerror = fin;
     // Some phones never fire onend; move on after a generous estimate.
-    const guard = setTimeout(fin, 2500 + (text.length * 120) / rate);
+    const guard = setTimeout(fin, 3000 + (text.length * 150) / rate);
     synth.speak(u);
   });
   const wait = (s) => new Promise((r) => { timer = setTimeout(r, s * 1000); });
 
-  const draw = (reveal) => {
-    const c = queue[i];
-    count.textContent = queue.length ? `${Math.min(i + 1, queue.length)} / ${queue.length}` : '';
-    trigEl.textContent = c ? c.trigger : 'No cards yet.';
-    targEl.textContent = c && reveal ? c.target : '';
-    playBtn.replaceChildren(icon(playing ? 'pause' : 'start'), playing ? 'Pause' : (i ? 'Resume' : 'Play'));
-  };
-
-  const loop = async () => {
-    while (playing && i < queue.length) {
-      const my = i;
-      draw(false);
-      phase = 'trigger';
-      await say(queue[my].trigger);
-      if (!playing || my !== i) continue;
+  // Each play() starts a new run; older runs notice and stop.
+  const loop = async (my) => {
+    const live = () => playing && my === run;
+    while (live() && i < queue.length) {
+      const c = queue[i];
+      showCard(false);
+      await say(c.trigger);
+      if (!live()) return;
       await wait(pause);
-      if (!playing || my !== i) continue;
-      draw(true);
-      await say(queue[my].target);
-      if (!playing || my !== i) continue;
+      if (!live()) return;
+      showCard(true);
+      await say(c.target);
+      if (!live()) return;
       await wait(1.2);
-      if (!playing || my !== i) continue;
+      if (!live()) return;
       i++;
     }
-    if (i >= queue.length) { stop(); i = 0; trigEl.textContent = 'All cards read.'; targEl.textContent = ''; }
+    if (live() && i >= queue.length) {
+      stop();
+      i = 0;
+      showButton();
+      trigEl.textContent = 'All cards read.';
+      targEl.textContent = '';
+    }
   };
   const play = () => {
     if (!queue.length) return;
     if (!synth) toast('This browser has no built-in voice.');
+    if (synth) synth.cancel();
     playing = true;
     keepAwake(true);
-    draw(false);
-    loop();
+    showButton();
+    loop(++run);
   };
   const stop = () => {
     playing = false;
+    run++;
     clearTimeout(timer);
     if (synth) synth.cancel();
     keepAwake(false);
-    draw(phase === 'trigger');
+    showButton();
   };
   const skip = () => {
-    if (synth) synth.cancel();
-    clearTimeout(timer);
-    i = Math.min(i + 1, queue.length - 1);
-    if (playing) { const keep = playing; playing = false; setTimeout(() => { playing = keep; loop(); }, 120); }
-    else draw(false);
+    if (!queue.length) return;
+    const wasPlaying = playing;
+    stop();
+    i = (i + 1) % queue.length;
+    showCard(false);
+    if (wasPlaying) setTimeout(play, 150);
   };
   const leave = () => { stop(); nav('#/cards'); };
 
@@ -198,16 +211,17 @@ export function renderAudio(root) {
     h('div', { class: 'rv-body' }, h('div', { class: 'rv-card' }, trigEl, targEl)),
     h('div', { class: 'audio-set' },
       h('div', { class: 'stepper' },
-        h('button', { class: 'btn', onclick: () => { rate = Math.max(0.6, +(rate - 0.1).toFixed(1)); setSettings({ rate }); showSettings(); } }, '−'),
+        h('button', { class: 'btn', 'aria-label': 'Slower', onclick: () => { rate = Math.max(0.6, +(rate - 0.1).toFixed(1)); setSettings({ rate }); showSettings(); } }, '−'),
         rateVal,
-        h('button', { class: 'btn', onclick: () => { rate = Math.min(2, +(rate + 0.1).toFixed(1)); setSettings({ rate }); showSettings(); } }, '+')),
+        h('button', { class: 'btn', 'aria-label': 'Faster', onclick: () => { rate = Math.min(2, +(rate + 0.1).toFixed(1)); setSettings({ rate }); showSettings(); } }, '+')),
       h('div', { class: 'stepper' },
-        h('button', { class: 'btn', onclick: () => { pause = Math.max(1, pause - 1); setSettings({ pause }); showSettings(); } }, '−'),
+        h('button', { class: 'btn', 'aria-label': 'Shorter pause', onclick: () => { pause = Math.max(1, pause - 1); setSettings({ pause }); showSettings(); } }, '−'),
         pauseVal,
-        h('button', { class: 'btn', onclick: () => { pause = Math.min(15, pause + 1); setSettings({ pause }); showSettings(); } }, '+'))),
+        h('button', { class: 'btn', 'aria-label': 'Longer pause', onclick: () => { pause = Math.min(15, pause + 1); setSettings({ pause }); showSettings(); } }, '+'))),
     h('div', { class: 'rv-bar' }, playBtn, h('button', { class: 'btn big', onclick: skip }, icon('next'), 'Next'))));
   dockToasts(root.querySelector('.rv-bar'));
   showSettings();
-  draw(false);
+  showCard(false);
+  showButton();
   return () => stop();
 }
