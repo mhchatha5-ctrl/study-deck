@@ -20,6 +20,7 @@ export function renderSettings(root) {
         displayCard(draw),
         dataSettings(draw),
         installCard(draw),
+        helpCard(),
         aboutCard()));
   };
   draw();
@@ -92,6 +93,20 @@ function installCard(redraw) {
     h('p', null, h('b', null, 'Android (Chrome): '), 'tap ⋮ (top right) › Add to Home screen › Install.'),
     h('p', null, h('b', null, 'iPhone (Safari): '), 'tap Share › Add to Home Screen › Add. On iPhone, add your PDFs after installing: the Home Screen app keeps its own storage.')));
   return h('section', { class: 'card' }, kids);
+}
+
+function helpCard() {
+  const tips = [
+    ['Start', 'Today shows one task. Start opens the PDF exactly where you stopped.'],
+    ['Sections', 'On the first question page tap “Questions start here”, then scroll to the first answer page (or open another PDF) and tap “Answers start here”, or “Same page”. A section runs until the next one starts.'],
+    ['Studying', 'Answers flips between questions and answers; each side keeps its place. Cover hides answers on the same page: drag its edge, Turn it to come from the side, Reveal to lift it.'],
+    ['Scoring', '✓ right, ✗ wrong, ? right but unsure. Numbers count up by themselves; − and + fix them. ✗ and ? go to the redo list: back in 3 days, then 10 days, then cleared.'],
+    ['Cards', 'Tap Card while studying to turn a wrong answer into a Trigger → Target card.'],
+    ['Zoom', 'Pinch with two fingers, or double-tap. Double-tap again to fit the page.'],
+  ];
+  return h('section', { class: 'card' },
+    h('h2', null, 'How it works'),
+    tips.map(([k, v]) => h('details', { class: 'help' }, h('summary', null, k), h('p', { class: 'small' }, v))));
 }
 
 function aboutCard() {

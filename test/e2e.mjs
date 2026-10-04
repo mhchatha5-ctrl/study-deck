@@ -23,7 +23,8 @@ async function check(name, fn) {
   }
 }
 
-const server = await serve(PORT);
+const overrides = new Map();
+const server = await serve(PORT, {}, overrides);
 const browser = await chromium.launch();
 const errors = [];
 
@@ -364,11 +365,13 @@ if (run(1)) {
     await page.waitForTimeout(300);
     assert.equal(await t.page(), 6);
     await page.screenshot({ path: 'test/out/resume.png' });
-    const frac = await page.evaluate(() => {
+    const fracNow = () => page.evaluate(() => {
       const v = document.querySelector('.pv:not(.hidden-side)');
       const p = v.querySelectorAll('.pv-page')[5];
       return (v.scrollTop - p.offsetTop) / p.offsetHeight;
     });
+    let frac = await fracNow();
+    for (let k = 0; k < 10 && Math.abs(frac - 0.5) >= 0.03; k++) { await page.waitForTimeout(200); frac = await fracNow(); }
     assert.ok(Math.abs(frac - 0.5) < 0.03, 'same spot on the page, got ' + frac);
     await t.back();
   });
@@ -693,11 +696,11 @@ function makeIcs(base, extra = []) {
   const day = (off) => { const d = new Date(base); d.setDate(d.getDate() + off); return d.toISOString().slice(0, 10).replace(/-/g, ''); };
   const ev = (uid, start, end, name) => ['BEGIN:VEVENT', `UID:${uid}@example.invalid`, start, end, `SUMMARY:${name}`, 'END:VEVENT'];
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
-    ...ev(1, `DTSTART;TZID=Europe/London:${day(0)}T070000`, `DTEND;TZID=Europe/London:${day(0)}T150000`, 'Early'),
+    ...ev(1, `DTSTART;TZID=Etc/UTC:${day(0)}T070000`, `DTEND;TZID=Etc/UTC:${day(0)}T150000`, 'Early'),
     ...ev(2, `DTSTART:${day(1)}T070000Z`, `DTEND:${day(1)}T193000Z`, 'LD'),
-    ...ev(3, `DTSTART;TZID=Europe/London:${day(2)}T200000`, `DTEND;TZID=Europe/London:${day(3)}T080000`, 'Night'),
+    ...ev(3, `DTSTART;TZID=Etc/UTC:${day(2)}T200000`, `DTEND;TZID=Etc/UTC:${day(3)}T080000`, 'Night'),
     ...ev(4, `DTSTART;VALUE=DATE:${day(9)}`, `DTEND;VALUE=DATE:${day(12)}`, 'Annual leave - long name that gets folded by the calendar exporter'),
-    ...ev(5, `DTSTART;TZID=Europe/London:${day(14)}T070000`, `DTEND;TZID=Europe/London:${day(14)}T150000`, 'Early'),
+    ...ev(5, `DTSTART;TZID=Etc/UTC:${day(14)}T070000`, `DTEND;TZID=Etc/UTC:${day(14)}T150000`, 'Early'),
     ...extra.flatMap(([off, name], i) => ev(100 + i, `DTSTART:${day(off)}T090000`, `DTEND:${day(off)}T170000`, name)),
     'END:VCALENDAR', ''];
   return lines.join('\r\n').replace(/(SUMMARY:.{50})(.+)/, '$1\r\n $2');
@@ -841,6 +844,187 @@ if (run(4)) {
   });
   await ctx.close();
   other.close();
+}
+
+// =====================================================================
+if (run(5)) {
+  console.log('Stage 5: past paper timer, progress, backup, offline');
+  const { ctx, page } = await newPhone({ time: new Date('2026-10-05T09:00:00') });
+  const t = H(page);
+  await page.goto(BASE);
+  await t.importPdfs(['Sample Question Book.pdf', 'Sample Paper.pdf']);
+  await t.kind('Sample Question Book', 'Question book');
+  await t.kind('Sample Paper', 'Past paper');
+
+  await check('timed paper: presets, countdown, score and time saved from ticks and crosses', async () => {
+    await t.open('Sample Paper');
+    await t.tool('More');
+    await page.click('.sheet-back.show .sheet >> text=Timed paper…');
+    assert.match(await page.locator('.sheet-back.show .sheet').innerText(), /1 hour[\s\S]*2 hours[\s\S]*3 hours[\s\S]*Start custom time/);
+    await page.click('.sheet-back.show .sheet .btn:has-text("1 hour")');
+    await page.click('.st-strip >> text=Same page');
+    assert.match(await page.locator('.chip.timer').innerText(), /^(59:\d\d|1:00:00)$/);
+    for (const m of ['right', 'right', 'wrong', 'unsure', 'right']) await page.click('.mark.' + m);
+    await page.clock.fastForward('01:05:00');
+    await page.waitForTimeout(300);
+    assert.match(await page.locator('.chip.timer').innerText(), /^\+\d+:\d\d$/);
+    assert.match(await page.locator('.chip.timer').getAttribute('class'), /over/);
+    await page.click('.chip.timer');
+    await page.click('.sheet-back.show .sheet >> text=Stop the clock');
+    await page.waitForTimeout(300);
+    await page.click('.chip.timer');
+    await page.click('.sheet-back.show .sheet >> text=Finish and save score');
+    assert.match(await page.locator('.sheet-back.show .sheet').innerText(), /4 \/ 5[\s\S]*80%/);
+    const p = (await t.state()).papers[0];
+    assert.equal(p.status, 'done');
+    assert.deepEqual([p.right, p.wrong, p.unsure, p.total], [3, 1, 1, 5]);
+    assert.ok(p.takenSec >= 3900 && p.takenSec < 3960, 'time taken ' + p.takenSec);
+    await page.goBack();
+    await t.back();
+  });
+
+  await check('custom time limit', async () => {
+    await t.open('Sample Paper');
+    await t.tool('More');
+    await page.click('.sheet-back.show .sheet >> text=Timed paper…');
+    await page.click('.sheet-back.show .sheet .btn:has-text("+15")');
+    assert.match(await page.locator('.stepval').innerText(), /1h 45m/);
+    await page.click('.sheet-back.show .sheet >> text=Start custom time');
+    assert.equal((await t.state()).papers.find((x) => x.status === 'running').limitSec, 105 * 60);
+    await page.click('.chip.timer');
+    await page.click('.sheet-back.show .sheet >> text=Cancel paper');
+    await page.click('.sheet-back.show .sheet .btn.danger');
+    await page.waitForTimeout(200);
+    assert.equal((await t.state()).papers.length, 1);
+    await t.back();
+  });
+
+  await check('progress: by topic and by section weakest first, this week, days left', async () => {
+    await page.evaluate(async () => {
+      const { S, createSection, putSection, markQuestion, setSettings } = await import('./js/store.js');
+      setSettings({ examDate: '2026-11-04', topics: ['Topic A', 'Topic B', 'Topic C'] });
+      const qb = [...S.pdfs.values()].find((p) => p.name === 'Sample Question Book').id;
+      const a = createSection(qb, 1, { title: 'Ch 1', topic: 'Topic A', aPdf: qb, aPage: 10 });
+      const b = createSection(qb, 4, { title: 'Ch 2', topic: 'Topic B', aPdf: qb, aPage: 12 });
+      ['right', 'right', 'right', 'wrong'].forEach((m, i) => markQuestion(a, i + 1, m, { qPage: 1, aPdf: qb, aPage: 10 }));
+      ['wrong', 'wrong', 'right'].forEach((m, i) => markQuestion(b, i + 1, m, { qPage: 4, aPdf: qb, aPage: 12 }));
+      putSection(a); putSection(b);
+    });
+    await page.click('#tabs button[data-tab=progress]');
+    await page.waitForSelector('.stats');
+    const stats = await page.locator('.stat b').allInnerTexts();
+    assert.deepEqual(stats, ['30', '12', '5'], JSON.stringify(stats));
+    const topicCard = page.locator('.card', { hasText: 'By topic' });
+    const names = await topicCard.locator('.bar b').allInnerTexts();
+    assert.deepEqual(names, ['Topic B', 'Topic A', 'No topic'], JSON.stringify(names));
+    assert.match(await topicCard.innerText(), /33%[\s\S]*75%/);
+    assert.match(await topicCard.innerText(), /Not started: Topic C/);
+    const secNames = await page.locator('.card', { hasText: 'By section' }).locator('.bar b').allInnerTexts();
+    assert.deepEqual(secNames, ['Sample Question Book · Ch 2', 'Sample Question Book · Ch 1', 'Sample Paper · Section 1 · p.1–3'], JSON.stringify(secNames));
+    assert.match(await page.locator('.card', { hasText: 'Timed past papers' }).innerText(), /Sample Paper[\s\S]*80%[\s\S]*4 \/ 5/);
+  });
+
+  await check('storage permission is asked for; a refusal is explained', async () => {
+    const persist = (await t.state()).kv.persist;
+    assert.ok(['granted', 'denied'].includes(persist), 'asked: ' + persist);
+    await page.click('#tabs button[data-tab=settings]');
+    const txt = await page.locator('.card', { hasText: 'Data and backup' }).innerText();
+    if (persist === 'denied') assert.match(txt, /refused permanent storage/);
+    else assert.match(txt, /Storage is permanent/);
+  });
+
+  let backupPath;
+  await check('export a single backup file (PDFs included)', async () => {
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Back up to one file')]);
+    backupPath = FIX + '../out/' + dl.suggestedFilename();
+    await dl.saveAs(backupPath);
+    assert.match(dl.suggestedFilename(), /^study-deck-backup-2026-10-05\.studydeck$/);
+    const { readFileSync } = await import('node:fs');
+    const buf = readFileSync(backupPath);
+    assert.equal(buf.subarray(0, 18).toString(), 'STUDYDECK-BACKUP 1');
+    assert.ok(buf.length > 10000, 'contains the PDFs');
+    assert.equal((await t.state()).kv.lastExport, '2026-10-05');
+  });
+
+  await check('weekly reminder to export', async () => {
+    await page.clock.setSystemTime(new Date('2026-10-11T09:00:00'));
+    await page.goto(BASE + '#/today');
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.equal(await page.locator('.banner', { hasText: /Last backup|not made a backup/ }).count(), 0);
+    await page.clock.setSystemTime(new Date('2026-10-13T09:00:00'));
+    await page.reload();
+    await page.waitForSelector('.task');
+    assert.match(await page.locator('.banner', { hasText: 'Last backup' }).innerText(), /Last backup 8 days ago/);
+  });
+  await ctx.close();
+
+  await check('import the backup on a fresh phone: everything comes back', async () => {
+    const { ctx: c2, page: p2 } = await newPhone({ time: new Date('2026-10-13T09:00:00') });
+    const t2 = H(p2);
+    await p2.goto(BASE + '#/settings');
+    await p2.waitForSelector('text=Restore from a backup file');
+    const [fc] = await Promise.all([p2.waitForEvent('filechooser'), p2.click('text=Restore from a backup file')]);
+    await fc.setFiles(backupPath);
+    assert.match(await p2.locator('.sheet-back.show .sheet').innerText(), /2 PDFs/);
+    await Promise.all([p2.waitForEvent('load'), p2.click('.sheet-back.show .sheet .btn.danger')]);
+    await p2.waitForSelector('#tabs button');
+    const s2 = await t2.state();
+    assert.deepEqual(s2.pdfs.map((p) => p.name).sort(), ['Sample Paper', 'Sample Question Book']);
+    assert.equal(s2.sections.length, 3);
+    assert.equal(s2.redo.length, 5);
+    assert.equal(s2.papers.length, 1);
+    await t2.open('Sample Question Book');
+    assert.ok(await p2.locator('.pv-canvas').count() > 0, 'restored PDF renders');
+    await c2.close();
+  });
+
+  await check('works offline after the first visit (installed app files cached)', async () => {
+    const { ctx: c3, page: p3 } = await newPhone({ sw: true });
+    const t3 = H(p3);
+    await p3.goto(BASE);
+    await p3.waitForFunction(() => navigator.serviceWorker.controller, null, { timeout: 20000 });
+    await t3.importPdfs(['Sample Scan.pdf']);
+    await c3.setOffline(true);
+    await p3.reload();
+    await p3.waitForSelector('#tabs button');
+    await t3.open('Sample Scan');
+    const n = await p3.locator('.pv-canvas').count();
+    assert.ok(n > 0, 'scanned PDF renders offline');
+    await c3.setOffline(false);
+
+    await check('an app update never wipes data or PDFs', async () => {
+      const { readFileSync } = await import('node:fs');
+      const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+      overrides.set('/sw.js', sw.replace(/const VERSION = '[^']*'/, "const VERSION = 'test-update'"));
+      await p3.goto(BASE + '#/today');
+      await p3.evaluate(() => navigator.serviceWorker.getRegistration().then((r) => r.update()));
+      await p3.waitForSelector('.banner:has-text("update is ready")', { timeout: 20000 });
+      await Promise.all([p3.waitForEvent('load'), p3.click('.banner:has-text("update is ready") .btn')]);
+      await p3.waitForSelector('#tabs button');
+      const keys = await p3.evaluate(() => caches.keys());
+      assert.ok(keys.includes('sd-app-test-update'), 'new version active: ' + keys);
+      overrides.clear();
+      const s3 = await t3.state();
+      assert.equal(s3.pdfs.length, 1);
+      await t3.open('Sample Scan');
+      assert.ok(await p3.locator('.pv-canvas').count() > 0, 'PDF still opens after update');
+    });
+    await c3.close();
+  });
+
+  await check('installable: manifest, icons and standalone display', async () => {
+    const { ctx: c4, page: p4 } = await newPhone();
+    const res = await p4.goto(BASE + 'manifest.webmanifest');
+    const m = await res.json();
+    assert.equal(m.display, 'standalone');
+    for (const icon of m.icons) {
+      const r = await p4.goto(BASE + icon.src);
+      assert.equal(r.status(), 200, icon.src);
+    }
+    assert.ok(m.icons.some((i) => i.sizes === '512x512' && i.purpose === 'maskable'));
+    await c4.close();
+  });
 }
 
 // =====================================================================

@@ -226,7 +226,7 @@ body.fullscreen #screen { padding-top: 0; }
 .st-view { flex: 1; position: relative; overflow: hidden; background: var(--pdfbg); }
 .pv {
   position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; touch-action: pan-x pan-y;
-  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain; overflow-anchor: none;
 }
 .pv.hidden-side { visibility: hidden; pointer-events: none; }
 .pv-inner { position: relative; will-change: transform; }

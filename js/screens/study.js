@@ -657,9 +657,14 @@ class Study {
     const show = () => { val.textContent = `${Math.floor(custom / 60)}h ${String(custom % 60).padStart(2, '0')}m`; };
     const start = (min) => {
       close();
+      // Ticks need a section: start one on page 1 if the paper has none yet.
+      if (!sectionsOf(this.pdfId).length) {
+        const sec = createSection(this.pdfId, 1);
+        if (sec) { this.pending = sec.id; if (this.qPage() !== 1) this.qv.goTo(1); }
+      }
       startPaper(this.pdfId, min * 60);
       toast(`Timer started: ${min >= 60 ? (min / 60) + ' h' : min + ' min'}. Your ticks and crosses are scored.`);
-      this.tick();
+      this.refresh();
     };
     const close = sheet('Timed paper', [
       h('div', { class: 'grid3' },

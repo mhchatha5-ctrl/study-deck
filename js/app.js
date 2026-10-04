@@ -97,13 +97,13 @@ export function applyTheme() {
 }
 
 // ---------- persistent storage ----------
-export async function requestPersist() {
+export async function requestPersist(silent) {
   if (!navigator.storage || !navigator.storage.persist) { setKv('persist', 'unsupported'); return 'unsupported'; }
   try {
     if (await navigator.storage.persisted()) { setKv('persist', 'granted'); return 'granted'; }
     const ok = await navigator.storage.persist();
     setKv('persist', ok ? 'granted' : 'denied');
-    if (!ok) toast('Your browser refused permanent storage. See Settings › Data.', null, 6000);
+    if (!ok && !silent) toast('Your browser refused permanent storage. See Settings › Data.', null, 6000);
     return ok ? 'granted' : 'denied';
   } catch {
     setKv('persist', 'denied');
@@ -144,9 +144,10 @@ export function banners() {
       h('button', { class: 'btn', onclick: promptInstall }, 'Install'),
       h('button', { class: 'iconbtn', 'aria-label': 'Not now', onclick: (e) => { setKv('installDismissed', true); e.currentTarget.parentElement.remove(); } }, icon('close'))));
   }
-  if (kv('persist') === 'denied') {
-    out.push(h('div', { class: 'banner warn' }, h('span', null, 'Your browser has not promised to keep this app’s data. Install it to your Home Screen and export a backup now and then.'),
-      h('button', { class: 'btn', onclick: () => nav('#/settings') }, 'Details')));
+  if (kv('persist') === 'denied' && !kv('persistAck')) {
+    out.push(h('div', { class: 'banner warn' }, h('span', null, 'Your browser refused to promise it will keep this app’s data. Installing the app usually fixes this. Back up now and then.'),
+      h('button', { class: 'btn', onclick: () => nav('#/settings') }, 'Details'),
+      h('button', { class: 'iconbtn', 'aria-label': 'OK', onclick: (e) => { setKv('persistAck', true); e.currentTarget.parentElement.remove(); } }, icon('close'))));
   }
   const last = kv('lastExport');
   const hasData = S.pdfs.size || S.cards.size;
@@ -194,9 +195,8 @@ async function start() {
 
   // Read the rota feed each time the app opens (directly from the phone).
   refreshRota().then((changed) => { if (changed && /^#\/(today)?$/.test(location.hash || '#/')) route(); }).catch(() => {});
-  if (navigator.storage && navigator.storage.persisted) {
-    navigator.storage.persisted().then((p) => { if (p) setKv('persist', 'granted'); }).catch(() => {});
-  }
+  // Ask again quietly on each open once there is data (installing the app often changes the answer).
+  if (S.pdfs.size && kv('persist') !== 'granted') requestPersist(true);
   registerWorker();
 }
 

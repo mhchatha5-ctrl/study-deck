@@ -10,10 +10,16 @@ const TYPES = {
   '.wasm': 'application/wasm', '.pdf': 'application/pdf', '.ics': 'text/calendar', '.bcmap': 'application/octet-stream',
   '.pfb': 'application/octet-stream', '.ttf': 'font/ttf', '.icc': 'application/octet-stream',
 };
-export function serve(port = 8080, extraHeaders = {}) {
+// overrides: Map of path -> body, used by tests to simulate an app update.
+export function serve(port = 8080, extraHeaders = {}, overrides = new Map()) {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://x');
+      if (overrides.has(url.pathname)) {
+        res.writeHead(200, { 'Content-Type': TYPES[extname(url.pathname)] || 'text/plain', 'Cache-Control': 'no-cache' });
+        res.end(overrides.get(url.pathname));
+        return;
+      }
       let p = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
       if (p.endsWith('/')) p += 'index.html';
       const file = join(root, p);

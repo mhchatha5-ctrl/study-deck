@@ -311,7 +311,7 @@ export class PdfViewer {
   // Learn the true size of every page in the background so long scrolls stay
   // accurate; remember it so the next open lays out exactly at once.
   async measureAll(token) {
-    if (!this.meta || (this.meta.sizes && this.meta.sizes.length === this.n)) return;
+    if (!this.meta || this.meta.measured || (this.meta.sizes && this.meta.sizes.length === this.n)) return;
     const sizes = [];
     let differs = false;
     const base = this.meta.size;

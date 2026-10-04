@@ -25,8 +25,7 @@ export async function addPdfs(onProgress) {
       await dbPut('files', { id, blob: new Blob([buf], { type: 'application/pdf' }) });
       putPdf({ id, name, kind: null, added: base + i, bytes: f.size, pages: null, pos: null });
       added++;
-      await inspectPdf(id);
-      dropDoc(id);
+      await inspectPdf(id, new Uint8Array(buf));
       onProgress && onProgress();
     } catch (err) {
       const full = err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message));

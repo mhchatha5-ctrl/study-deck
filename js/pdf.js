@@ -101,12 +101,14 @@ async function readOutline(doc) {
   return out.filter((o, i) => i === 0 || o.page !== out[i - 1].page);
 }
 
-// Fill in page count, first page size and bookmarks after import.
-export async function inspectPdf(id) {
+// Fill in page count, first page size and bookmarks after import. When the
+// bytes are already in memory (just imported) they are used directly.
+export async function inspectPdf(id, data) {
   const p = S.pdfs.get(id);
   if (!p) return;
+  let own = null;
   try {
-    const doc = await getDoc(id);
+    const doc = data ? (own = await openData(data)) : await getDoc(id);
     const page1 = await doc.getPage(1);
     const vp = page1.getViewport({ scale: 1 });
     p.pages = doc.numPages;
@@ -119,5 +121,6 @@ export async function inspectPdf(id) {
       ? 'This PDF is password protected.'
       : 'Could not open this PDF.';
   }
+  if (own) own.destroy().catch(() => {});
   putPdf(p);
 }

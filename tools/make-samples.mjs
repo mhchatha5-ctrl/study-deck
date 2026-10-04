@@ -192,8 +192,8 @@ const shifts = [
 ];
 for (const [off, name, s, e] of shifts) {
   const end = e < s ? day(off + 1) : day(off);
-  ev.push(['BEGIN:VEVENT', `UID:sample-${off}@example.invalid`, `DTSTART;TZID=Europe/London:${day(off)}T${s}00`,
-    `DTEND;TZID=Europe/London:${end}T${e}00`, `SUMMARY:${name}`, 'END:VEVENT'].join('\r\n'));
+  ev.push(['BEGIN:VEVENT', `UID:sample-${off}@example.invalid`, `DTSTART;TZID=Etc/UTC:${day(off)}T${s}00`,
+    `DTEND;TZID=Etc/UTC:${end}T${e}00`, `SUMMARY:${name}`, 'END:VEVENT'].join('\r\n'));
 }
 ev.push(['BEGIN:VEVENT', 'UID:sample-leave@example.invalid', `DTSTART;VALUE=DATE:${day(9)}`, `DTEND;VALUE=DATE:${day(12)}`,
   'SUMMARY:Annual leave - a very long shift name that the calendar folds onto a second line', 'END:VEVENT'].join('\r\n'));
