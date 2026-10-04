@@ -1,2 +1,2 @@
-# tudy-deck
-tudy-deck
+# study-deck
+study-deck
