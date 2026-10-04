@@ -31,7 +31,7 @@ async function newPhone(opts = {}) {
   const ctx = await browser.newContext({ ...devices[DEVICE], serviceWorkers: opts.sw ? 'allow' : 'block', acceptDownloads: true });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) errors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource|blocked by CORS policy/.test(m.text())) errors.push(m.text()); });
   if (opts.time) await page.clock.install({ time: opts.time });
   return { ctx, page };
 }
@@ -685,6 +685,162 @@ if (run(3)) {
     await page.click('.st-head .iconbtn');
   });
   await ctx.close();
+}
+
+// =====================================================================
+// Builds a made-up rota around a given date (YYYYMMDD strings, CRLF, folding).
+function makeIcs(base, extra = []) {
+  const day = (off) => { const d = new Date(base); d.setDate(d.getDate() + off); return d.toISOString().slice(0, 10).replace(/-/g, ''); };
+  const ev = (uid, start, end, name) => ['BEGIN:VEVENT', `UID:${uid}@example.invalid`, start, end, `SUMMARY:${name}`, 'END:VEVENT'];
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+    ...ev(1, `DTSTART;TZID=Europe/London:${day(0)}T070000`, `DTEND;TZID=Europe/London:${day(0)}T150000`, 'Early'),
+    ...ev(2, `DTSTART:${day(1)}T070000Z`, `DTEND:${day(1)}T193000Z`, 'LD'),
+    ...ev(3, `DTSTART;TZID=Europe/London:${day(2)}T200000`, `DTEND;TZID=Europe/London:${day(3)}T080000`, 'Night'),
+    ...ev(4, `DTSTART;VALUE=DATE:${day(9)}`, `DTEND;VALUE=DATE:${day(12)}`, 'Annual leave - long name that gets folded by the calendar exporter'),
+    ...ev(5, `DTSTART;TZID=Europe/London:${day(14)}T070000`, `DTEND;TZID=Europe/London:${day(14)}T150000`, 'Early'),
+    ...extra.flatMap(([off, name], i) => ev(100 + i, `DTSTART:${day(off)}T090000`, `DTEND:${day(off)}T170000`, name)),
+    'END:VCALENDAR', ''];
+  return lines.join('\r\n').replace(/(SUMMARY:.{50})(.+)/, '$1\r\n $2');
+}
+
+if (run(4)) {
+  console.log('Stage 4: rota link');
+  const other = await serve(PORT + 1); // a different origin that sends no CORS headers
+  const { ctx, page } = await newPhone({ time: new Date('2026-10-04T09:00:00') });
+  const t = H(page);
+  const requests = [];
+  page.on('request', (r) => requests.push(r.url()));
+  let feed = makeIcs('2026-10-04T12:00:00Z');
+  let feedHits = 0;
+  await page.route('**/my-rota.ics', (route) => { feedHits++; route.fulfill({ status: 200, contentType: 'text/calendar', body: feed }); });
+  await page.goto(BASE);
+  await seedLibrary(page, t);
+
+  await check('blocked link: says so plainly and offers .ics import', async () => {
+    await page.click('#tabs button[data-tab=settings]');
+    await page.locator('.card:has(h2:text-is("Rota"))').locator('input[type=url]').fill(`http://localhost:${PORT + 1}/test/server.mjs`);
+    await page.click('text=Save and read');
+    await page.locator('.card:has(h2:text-is("Rota")) .status.bad').waitFor();
+    const msg = await page.locator('.card:has(h2:text-is("Rota"))').innerText();
+    assert.match(msg, /blocked reading this link directly/);
+    assert.match(msg, /import it below/);
+    assert.ok(await page.locator('text=Import .ics file').isVisible());
+  });
+
+  await check('import a downloaded .ics file instead', async () => {
+    const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('text=Import .ics file')]);
+    await fc.setFiles({ name: 'rota.ics', mimeType: 'text/calendar', buffer: Buffer.from(feed) });
+    await page.waitForTimeout(300);
+    const r = (await t.state()).kv.rota;
+    assert.equal(r.source, 'file');
+    assert.ok(r.events.some((e) => e.d === '2026-10-04' && e.n === 'Early'));
+    assert.deepEqual(r.events.filter((e) => e.n.startsWith('Annual')).map((e) => e.d), ['2026-10-13', '2026-10-14', '2026-10-15']);
+  });
+
+  await check('readable link: read directly and again each time the app opens', async () => {
+    await page.locator('.card:has(h2:text-is("Rota"))').locator('input[type=url]').fill(BASE + 'my-rota.ics');
+    await page.click('text=Save and read');
+    await page.locator('.card:has(h2:text-is("Rota")) .status.ok').waitFor();
+    const hits = feedHits;
+    await page.reload();
+    await page.waitForSelector('header h1');
+    await page.waitForTimeout(400);
+    assert.equal(feedHits, hits + 1);
+    assert.equal((await t.state()).kv.rota.source, 'url');
+  });
+
+  await check('each distinct shift name is listed once and labelled with one tap', async () => {
+    await page.click('#tabs button[data-tab=today]');
+    await page.waitForSelector('.task');
+    await page.waitForSelector('.card .shiftrow');
+    const card = page.locator('.card', { hasText: 'New shift name' });
+    assert.equal(await card.locator('.shiftrow').count(), 4);
+    const label = async (name, l) => card.locator('.shiftrow').filter({ has: page.locator('b', { hasText: new RegExp('^' + name) }) }).locator('.chip', { hasText: l }).click();
+    await label('Early', 'Work');
+    await label('LD', 'Long');
+    await label('Night', 'Night');
+    await label('Annual leave', 'Away');
+    assert.equal(await page.locator('.card', { hasText: 'New shift name' }).count(), 0);
+    assert.match(await page.locator('.chips').first().innerText(), /Work day/);
+    await page.waitForTimeout(300); // let the last write reach storage before reloading
+  });
+
+  await check('new names are asked about once; known ones apply automatically', async () => {
+    feed = makeIcs('2026-10-04T12:00:00Z', [[5, 'Late']]);
+    await page.reload();
+    await page.waitForSelector('.task');
+    await page.waitForSelector('.shiftrow');
+    const card = page.locator('.card', { hasText: 'New shift name' });
+    assert.equal(await card.locator('.shiftrow').count(), 1);
+    assert.match(await card.innerText(), /Late/);
+    await card.locator('.chip', { hasText: 'Work' }).click();
+    await page.waitForTimeout(300);
+  });
+
+  const taskAt = async (iso) => {
+    await page.clock.setSystemTime(new Date(iso));
+    await page.goto(BASE + '#/today');
+    await page.reload();
+    await page.waitForSelector('.task');
+    await page.waitForTimeout(300);
+    return { chip: await page.locator('.chips').first().innerText(), title: await page.locator('.task h2').innerText() };
+  };
+
+  await check('work day: short task (cards when there are some)', async () => {
+    await page.evaluate(async () => { const { addCard } = await import('./js/store.js'); addCard({ trigger: 'T', target: 'G' }); });
+    const r = await taskAt('2026-10-04T10:00:00');
+    assert.match(r.chip, /Work day/);
+    assert.match(r.title, /Card round/);
+  });
+
+  await check('long day and night: short tasks too', async () => {
+    let r = await taskAt('2026-10-05T10:00:00');
+    assert.match(r.chip, /Long day/);
+    assert.match(r.title, /Card round/);
+    r = await taskAt('2026-10-06T10:00:00');
+    assert.match(r.chip, /Night/);
+    assert.match(r.title, /Card round/);
+  });
+
+  await check('day off (no shift): a longer block — the next section', async () => {
+    const r = await taskAt('2026-10-07T10:00:00');
+    assert.match(r.chip, /Day off/);
+    assert.match(r.title, /Continue|Next section/);
+  });
+
+  await check('day away: Quick 5 only', async () => {
+    const r = await taskAt('2026-10-14T10:00:00');
+    assert.match(r.chip, /Away/);
+    assert.match(r.title, /Quick 5/);
+  });
+
+  await check('due redo items still come first on a work day', async () => {
+    await page.evaluate(async () => {
+      const { S, markQuestion } = await import('./js/store.js');
+      const sec = [...S.sections.values()].find((s) => s.title === 'Ch 1');
+      markQuestion(sec, 1, 'wrong', { qPage: 1, aPdf: sec.aPdf, aPage: 10 });
+    });
+    const r = await taskAt('2026-10-18T10:00:00');
+    assert.match(r.chip, /Work day/);
+    assert.match(r.title, /Redo 1 question/);
+  });
+
+  await check('last resort: tap days on a simple calendar', async () => {
+    await page.click('#tabs button[data-tab=settings]');
+    await page.click('summary:has-text("tap days on a calendar")');
+    await page.click('details.help .chips .chip:has-text("Away")');
+    await page.click('.cal button[aria-label^="Tue 20 Oct"]');
+    assert.equal((await t.state()).kv.rota.manual['2026-10-20'], 'away');
+    const r = await taskAt('2026-10-20T10:00:00');
+    assert.match(r.chip, /Away/);
+  });
+
+  await check('the rota link is only ever read by the phone itself (no other services)', async () => {
+    const hosts = [...new Set(requests.map((u) => new URL(u).host))];
+    assert.deepEqual(hosts.filter((x) => !x.startsWith('localhost:')), []);
+  });
+  await ctx.close();
+  other.close();
 }
 
 // =====================================================================
